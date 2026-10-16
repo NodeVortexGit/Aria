@@ -13,7 +13,7 @@ from chromadb.config import Settings
 
 
 class StoryMemory:
-    """Manages all persistent memory via ChromaDB."""
+    """Persistent ChromaDB memory with every story record scoped by story_id."""
 
     def __init__(self, persist_path: str = "./chroma_db"):
         os.makedirs(persist_path, exist_ok=True)

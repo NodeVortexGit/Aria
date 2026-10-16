@@ -1,4 +1,10 @@
 .env
+.venv/
+models/
+aria-web.log
+aria-web.pid
+aria-ollama.log
+aria-ollama.pid
 chroma_db/
 audio/output/
 audio/reference_voice.wav

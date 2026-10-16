@@ -5,7 +5,7 @@ core.py -- Aria's central orchestrator.
 import os
 import uuid
 from dotenv import load_dotenv
-from groq import Groq
+from openai import OpenAI
 
 from .memory import StoryMemory
 from .story_engine import StoryEngine
@@ -17,29 +17,12 @@ load_dotenv()
 class AriaSession:
 
     def __init__(self):
-        groq_key = os.getenv("GROQ_API_KEY", "")
-        if not groq_key or groq_key == "your_groq_api_key_here":
-            raise ValueError("GROQ_API_KEY not set. Open .env and paste your Groq API key.")
-
-        eleven_key = os.getenv("ELEVENLABS_API_KEY", "")
-        if not eleven_key or eleven_key == "your_elevenlabs_api_key_here":
-            raise ValueError("ELEVENLABS_API_KEY not set. Open .env and paste your ElevenLabs API key.")
-
-        voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
-        if not voice_id or voice_id == "your_voice_id_here":
-            raise ValueError("ELEVENLABS_VOICE_ID not set. Open .env and paste Aria's voice ID from ElevenLabs.")
-
-        self.groq_client = Groq(api_key=groq_key)
+        endpoint = os.getenv("ARIA_LLM_URL", "http://127.0.0.1:11435/v1")
+        self.llm_client = OpenAI(base_url=endpoint, api_key="local-aria")
         self.memory = StoryMemory(persist_path=os.getenv("CHROMA_PATH", "./chroma_db"))
-
-        self.tts = AriaVoice(
-            api_key=eleven_key,
-            voice_id=voice_id,
-            output_dir=os.getenv("AUDIO_OUTPUT_DIR", "./audio/output"),
-            enabled=True
-        )
-        self.voice_ref_valid = True
-        self.voice_ref_msg = f"Using ElevenLabs voice ID: {voice_id[:8]}..."
+        self.tts = AriaVoice(output_dir=os.getenv("AUDIO_OUTPUT_DIR", "./audio/output"))
+        self.voice_ref_valid = self.tts.is_available()
+        self.voice_ref_msg = "Piper Amy (American English, medium)" if self.voice_ref_valid else "Piper is not installed yet"
 
         self.current_story_id: str = None
         self.engine: StoryEngine = None
@@ -49,7 +32,7 @@ class AriaSession:
         active = self.memory.get_active_story()
         if active:
             self.current_story_id = active["story_id"]
-            self.engine = StoryEngine(self.groq_client, self.memory, self.current_story_id)
+            self.engine = StoryEngine(self.llm_client, self.memory, self.current_story_id)
             return True, active.get("title", "Untitled")
         return False, None
 
@@ -59,16 +42,25 @@ class AriaSession:
         story_id = str(uuid.uuid4())[:8]
         self.current_story_id = story_id
         self.memory.save_story_meta(story_id, title or f"Story {story_id}")
-        self.engine = StoryEngine(self.groq_client, self.memory, story_id)
+        self.engine = StoryEngine(self.llm_client, self.memory, story_id)
         return self.engine.start_new_story(premise=premise)
 
-    def send(self, raw_input: str) -> tuple[str, str]:
+    def send(self, raw_input: str, roleplay: bool = False,
+             roleplay_persona: str = "") -> tuple[str, str]:
         if not self.engine:
-            return "aria", "No story active. Type /new to start a new story."
+            stripped = raw_input.strip()
+            if stripped.startswith("/new"):
+                return "command", self._handle_command(stripped[1:])
+            if stripped.startswith("/"):
+                return "command", "No story is active yet. Use /new [premise] to begin one."
+            if not stripped.startswith("me:"):
+                direct = StoryEngine(self.llm_client, self.memory, "")
+                return "story", direct._aria_direct_response(stripped, roleplay, roleplay_persona)
+            return "aria", "No story is active yet. Begin one with /new, or start from a story card."
         mode, content = self.engine.process_player_input(raw_input)
         if mode == "command":
             return "command", self._handle_command(content)
-        return "story", self.engine.respond_to_player(mode, content)
+        return "story", self.engine.respond_to_player(mode, content, roleplay, roleplay_persona)
 
     def _handle_command(self, cmd: str) -> str:
         parts = cmd.strip().split(None, 1)
@@ -126,6 +118,12 @@ class AriaSession:
     def speak(self, text: str):
         if self.tts.enabled:
             self.tts.speak(text)
+
+    def synthesize(self, text: str) -> bytes:
+        return self.tts.synthesize(text)
+
+    def set_voice_quality(self, quality: str):
+        self.tts.set_quality(quality)
 
     def get_story_title(self) -> str:
         active = self.memory.get_active_story()

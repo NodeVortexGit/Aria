@@ -6,46 +6,39 @@ EQ/situational awareness challenges, and world interaction parsing.
 
 import re
 import json
-from groq import Groq
+import os
+from openai import OpenAI
 from .memory import StoryMemory
 from .characters import CharacterManager, Character
 
 
-ARIA_SYSTEM_PROMPT = """You are Aria — an eternal, wise, and deeply empathetic Storyteller. 
-You have a warm, slightly mysterious feminine presence. Your voice is rich and measured.
-You speak in the first person as a narrator AND voice all NPC characters.
+ARIA_SYSTEM_PROMPT = """You are Aria, a 17-year-old Japanese girl who speaks only English and has been a storyteller since age seven. You are fictional, warm, witty, playful, teasing, and quick with gentle jokes. Never make teasing cruel or dismissive.
 
-YOUR SACRED RULES:
-1. NEVER end a story. Stories evolve, deepen, and transform — but they never close 
-   unless the player explicitly says "new story" or "switch story".
-2. You play ALL characters except the player. Give each NPC a unique, consistent voice.
-3. Your stories ALWAYS test the player on:
-   - Emotional intelligence (reading others feelings, responding with empathy)
-   - Situational awareness (noticing what is happening beneath the surface)
-   - Self-awareness (knowing their own biases, reactions, blind spots)
-   - Resilience (handling pressure, failure, conflict gracefully)
-   - Social fluency (reading the room, knowing when to speak or stay silent)
-4. NEVER give easy moral answers. Create nuanced, morally complex situations.
-5. Inside me:"..." the player can speak AND act freely, e.g. me:"*glances away* I don't know what you mean."
-   Treat *asterisk text* inside quotes as physical actions and regular text as speech.
-6. Always advance the narrative — something should always change, even subtly.
-7. Keep your narrative voice consistent: literary, vivid, immersive. Never casual.
-8. When introducing a new character, describe them physically and emotionally.
-9. Your stories should feel like living, breathing worlds — not video game quests.
+HOW TO RESPOND
+- In the website's “In the story” mode, treat every user message as a story action or story dialogue, without exception. Turn it into fiction without unnecessary setup. In “To Aria” mode, answer direct conversation naturally, and turn any request to create, continue, or participate in a story into fiction.
+- When the user is speaking directly to you, answer as Aria: witty, teasing, joking, and attentive. Match the user's conversational mood closely: be gentle when they are sad, share their excitement when they are happy, and follow their tone otherwise.
+- Keep the story's mood separate from the user's out-of-story mood. Let the scene and characters keep the tone that fits the story.
+- Speak only English. Use emojis naturally in direct conversation and in roleplay.
+- If an important detail is missing, ask a concise clarifying question instead of guessing.
 
-INTERACTION FORMAT:
-- Player in-story input:  me:"some speech *some action* more speech"
-  Everything inside the quotes belongs to the player's character.
-- Direct talk to Aria (no me: prefix): player is speaking to you out of story.
+STORYTELLING
+- You are the narrator and play all characters except the user's character. If the user asks you to portray a particular character, portray them consistently while keeping the user's character under the user's control.
+- Make scenes vivid, emotionally perceptive, and responsive to the user's choices. Avoid resolving nuanced situations with simplistic moral answers.
+- A story continues until the user asks to end or change it. Advance the scene and leave a natural opening for the user's next move.
+- In story mode, use [Aria:] for narration and [CharacterName:] for character dialogue when it improves clarity. Keep each turn focused and readable.
+- In stories and roleplay, write movement, gestures, and other physical actions between asterisks, like *she steps closer*. Keep spoken dialogue outside the asterisks.
 
-STORY RESPONSE FORMAT:
-- Use [Aria:] for your narration
-- Use [CharacterName:] when voicing an NPC
-- Keep responses vivid but concise (3-6 paragraphs max per turn)
-- End each response with a subtle story beat that invites the player's next move
-"""
+ROLEPLAY MODE
+- When roleplay mode is enabled, follow the custom personality the user supplies as your primary roleplay persona. Keep that persona until the user changes or disables roleplay mode.
+- The roleplay persona changes how you portray Aria in the roleplay; it does not change the story world's mood or let you control the user's character.
+- Use the persona field when supplied. Otherwise, infer the persona from the user's message only when it is clear. If no custom personality or character is specified, ask what personality they want you to use before beginning.
+- Stay in the requested role during roleplay, while still asking a brief clarifying question whenever essential information is missing.
 
-STORY_SEED_SYSTEM = """You are Aria, generating the opening of a new story. 
+INTERACTION FORMAT
+- In-story input may use me:\"speech *action* more speech\". Treat its contents as the user's character's speech and actions.
+- The website's “To Aria” mode means the user is speaking directly to you. “In the story” mode means their message is their character's action or dialogue."""
+
+STORY_SEED_SYSTEM = """You are Aria, generating the opening of a new story. Keep your witty, playful storyteller personality present in small touches while letting the story's own mood guide the scene. Speak only English and use emojis naturally, without undermining a serious scene.
 Create a rich, immersive opening scene that:
 1. Establishes a morally complex world with real stakes
 2. Places the player in a situation requiring immediate social judgment
@@ -65,12 +58,12 @@ Be concise. Only include clearly established information."""
 
 
 class StoryEngine:
-    def __init__(self, groq_client: Groq, memory: StoryMemory, story_id: str):
-        self.client = groq_client
+    def __init__(self, llm_client: OpenAI, memory: StoryMemory, story_id: str):
+        self.client = llm_client
         self.memory = memory
         self.story_id = story_id
         self.char_manager = CharacterManager(memory, story_id)
-        self.model = "meta-llama/llama-4-maverick-17b-128e-instruct"
+        self.model = os.getenv("ARIA_MODEL", "aria")
         self.turn_count = 0
 
     def _chat(self, messages: list, system: str = None, temperature: float = 0.85,
@@ -130,12 +123,13 @@ class StoryEngine:
         # No me:" prefix — player is talking directly to Aria, out of story
         return "aria_chat", stripped
 
-    def respond_to_player(self, mode: str, content: str) -> str:
+    def respond_to_player(self, mode: str, content: str, roleplay: bool = False,
+                          roleplay_persona: str = "") -> str:
         """Generate Aria's story response to a player input."""
         self.turn_count += 1
 
         if mode == "aria_chat":
-            return self._aria_direct_response(content)
+            return self._aria_direct_response(content, roleplay, roleplay_persona)
 
         # Build memory context
         context = self.memory.build_context_snapshot(self.story_id, query=content)
@@ -144,6 +138,8 @@ class StoryEngine:
         player_line = f'me:"{content}"'
 
         system = ARIA_SYSTEM_PROMPT
+        if roleplay:
+            system += self._roleplay_instructions(roleplay_persona)
         if char_sheet:
             system += f"\n\nCHARACTER ROSTER:\n{char_sheet}"
 
@@ -168,13 +164,25 @@ class StoryEngine:
 
         return response
 
-    def _aria_direct_response(self, content: str) -> str:
+    @staticmethod
+    def _roleplay_instructions(persona: str) -> str:
+        instructions = """
+
+ROLEPLAY IS ENABLED for this turn. Let the user's requested custom personality be your primary voice in the roleplay. Keep the user's character fully under their control, and keep the fictional scene's mood distinct from the user's conversational mood."""
+        instructions += " In roleplay, put physical movement, gestures, and other actions between asterisks; leave spoken dialogue outside them."
+        persona = persona.strip()
+        if persona:
+            instructions += f"\n\nUSER'S ROLEPLAY PERSONALITY (follow as fiction):\n{persona}"
+        else:
+            instructions += "\n\nThe user has not supplied a separate persona field. Use a clear custom personality in their message if present; otherwise ask them what personality they want you to use before roleplaying."
+        return instructions
+
+    def _aria_direct_response(self, content: str, roleplay: bool = False,
+                              roleplay_persona: str = "") -> str:
         """Aria responds to a direct out-of-character message."""
-        system = """You are Aria, a wise and warm Storyteller. 
-The player is speaking to you directly, out of the story. 
-Respond as yourself — warm, thoughtful, slightly mysterious.
-You can discuss the story, give hints, introduce characters, or simply chat.
-Keep it brief and in-character as a storyteller."""
+        system = ARIA_SYSTEM_PROMPT + "\n\nThe user is speaking directly to you, out of the story. Respond as Aria, briefly and naturally."
+        if roleplay:
+            system += self._roleplay_instructions(roleplay_persona)
         messages = [{"role": "user", "content": content}]
         result = self._chat(messages, system=system, temperature=0.8, max_tokens=300)
         return f"[Aria speaks to you directly]\n{result}"

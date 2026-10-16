@@ -35,8 +35,8 @@ def main():
         except ValueError as e:
             boot_console.print(f"[bold red]Setup error:[/bold red] {e}")
             boot_console.print(
-                "[yellow]Please edit [bold].env[/bold] and add your Groq API key.[/yellow]\n"
-                "[dim]See config/api_keys.txt for instructions.[/dim]"
+                "[yellow]Install the local Aria dependencies with [bold]./install.sh[/bold].[/yellow]\n"
+                "[dim]The local model API is started by ./aria-launcher.sh.[/dim]"
             )
             sys.exit(1)
 
