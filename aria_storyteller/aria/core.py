@@ -45,6 +45,25 @@ class AriaSession:
         self.engine = StoryEngine(self.llm_client, self.memory, story_id)
         return self.engine.start_new_story(premise=premise)
 
+    def activate_story(self, story_id: str) -> bool:
+        story = self.memory.activate_story(story_id)
+        if not story:
+            return False
+        self.current_story_id = story_id
+        self.engine = StoryEngine(self.llm_client, self.memory, story_id)
+        return True
+
+    def delete_story(self, story_id: str) -> bool:
+        if not self.memory.delete_story(story_id):
+            return False
+        if story_id == self.current_story_id:
+            self.current_story_id = None
+            self.engine = None
+            remaining = self.memory.list_stories()
+            if remaining:
+                self.activate_story(remaining[0]["id"])
+        return True
+
     def send(self, raw_input: str, roleplay: bool = False,
              roleplay_persona: str = "") -> tuple[str, str]:
         if not self.engine:

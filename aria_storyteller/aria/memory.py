@@ -64,10 +64,43 @@ class StoryMemory:
         results = self.story_meta.get()
         stories = []
         for i, sid in enumerate(results["ids"]):
-            m = results["metadatas"][i]
+            m = dict(results["metadatas"][i])
             m["id"] = sid
             stories.append(m)
-        return stories
+        return sorted(stories, key=lambda story: story.get("created_at", ""), reverse=True)
+
+    def activate_story(self, story_id: str) -> Optional[dict]:
+        """Mark one saved story active and return its metadata."""
+        results = self.story_meta.get(ids=[story_id])
+        if not results["ids"]:
+            return None
+        active = self.story_meta.get(where={"active": "true"})
+        if active["ids"]:
+            self.story_meta.update(ids=active["ids"], metadatas=[{"active": "false"}] * len(active["ids"]))
+        self.story_meta.update(ids=[story_id], metadatas=[{"active": "true"}])
+        meta = dict(results["metadatas"][0])
+        meta["story_id"] = story_id
+        return meta
+
+    def rename_story(self, story_id: str, title: str) -> bool:
+        results = self.story_meta.get(ids=[story_id])
+        if not results["ids"]:
+            return False
+        metadata = dict(results["metadatas"][0])
+        document = results["documents"][0] if results["documents"] else ""
+        summary = document.partition("\n")[2]
+        metadata["title"] = title
+        self.story_meta.update(ids=[story_id], documents=[f"{title}\n{summary}"], metadatas=[metadata])
+        return True
+
+    def delete_story(self, story_id: str) -> bool:
+        """Permanently remove a story and every record scoped to it."""
+        if not self.story_meta.get(ids=[story_id])["ids"]:
+            return False
+        for collection in (self.story_events, self.characters, self.world_facts, self.dialogue_log):
+            collection.delete(where={"story_id": story_id})
+        self.story_meta.delete(ids=[story_id])
+        return True
 
     # ── Story events ────────────────────────────────────────────────────
 

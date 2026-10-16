@@ -36,6 +36,15 @@ class QualityInput(BaseModel):
     quality: str
 
 
+class StorySelection(BaseModel):
+    story_id: str
+
+
+class StoryRename(BaseModel):
+    story_id: str
+    title: str
+
+
 @app.on_event("startup")
 def startup():
     global session
@@ -61,7 +70,7 @@ def ollama_model_status():
 
 @app.get("/")
 def index():
-    return FileResponse(ROOT / "web" / "index.html")
+    return FileResponse(ROOT / "web" / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -75,8 +84,8 @@ def status():
 
 
 @app.get("/api/history")
-def history():
-    story = session.memory.get_active_story()
+def history(story_id: str | None = None):
+    story = next((item for item in session.memory.list_stories() if item["id"] == story_id), None) if story_id else session.memory.get_active_story()
     if not story:
         return {"messages": []}
     story_id = story["story_id"]
@@ -89,6 +98,37 @@ def history():
     if openings.get("documents"):
         messages.insert(0, {"role": "assistant", "content": openings["documents"][0]})
     return {"story": story.get("title", "Untitled story"), "messages": messages}
+
+
+@app.get("/api/stories")
+def stories():
+    return {"stories": session.memory.list_stories(), "active_story_id": session.current_story_id}
+
+
+@app.post("/api/stories/activate")
+def activate_story(body: StorySelection):
+    if not session.activate_story(body.story_id):
+        raise HTTPException(404, "That story could not be found.")
+    return {"story": session.get_story_title(), "story_id": session.current_story_id}
+
+
+@app.post("/api/stories/rename")
+def rename_story(body: StoryRename):
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "Story name cannot be empty.")
+    if len(title) > 100:
+        raise HTTPException(400, "Story names must be 100 characters or fewer.")
+    if not session.memory.rename_story(body.story_id, title):
+        raise HTTPException(404, "That story could not be found.")
+    return {"story": title}
+
+
+@app.delete("/api/stories/{story_id}")
+def delete_story(story_id: str):
+    if not session.delete_story(story_id):
+        raise HTTPException(404, "That story could not be found.")
+    return {"stories": session.memory.list_stories(), "active_story_id": session.current_story_id}
 
 
 @app.post("/api/chat")
